@@ -143,20 +143,20 @@ export default function App() {
       const data = await res.json();
       const imported: Song[] = (data.items || [])
         .map((it: any) => it.track)
-        .filter((t: any) => t && t.preview_url)
+        .filter((t: any) => t)
         .map((t: any) => ({
           id: `spotify-${t.id}`,
           title: t.name,
           artist: (t.artists || []).map((a: any) => a.name).join(", "),
           album: t.album?.name ?? "",
-          url: t.preview_url,
-          duration: 30,
+          url: t.preview_url || "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA", // fallback to silent 1s audio if no preview
+          duration: t.preview_url ? 30 : 1, // 1s duration for the silent fallback
           cover: t.album?.images?.[0]?.url,
           source: "spotify" as const,
-          previewOnly: true,
+          previewOnly: !!t.preview_url,
         }));
       if (!imported.length) {
-        setSpotifyError("No tracks with preview available in your saved tracks.");
+        setSpotifyError("Your Spotify library is empty.");
       } else {
         setSongs((s) => [...s, ...imported]);
         setSpotifyConnected(true);
