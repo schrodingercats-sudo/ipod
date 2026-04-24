@@ -102,6 +102,14 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
   useEffect(() => {
     const a = audioRef.current;
     if (!a || !songs[currentIdx]) return;
+    
+    if (!songs[currentIdx].url) {
+      setIsPlaying(false);
+      setProgress(0);
+      a.src = "";
+      return;
+    }
+
     a.src = songs[currentIdx].url;
     a.load();
     if (isPlaying) a.play().catch(() => setIsPlaying(false));
@@ -110,8 +118,11 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
-    if (isPlaying) a.play().catch(() => setIsPlaying(false));
-    else a.pause();
+    if (isPlaying && songs[currentIdx]?.url) {
+      a.play().catch(() => setIsPlaying(false));
+    } else {
+      a.pause();
+    }
   }, [isPlaying]);
 
   const pushScreen = (s: Screen, t: string) => {
@@ -272,6 +283,7 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
   const onPlayPause = () => {
     flashPressed("play");
     if (!songs[currentIdx]) return;
+    if (!songs[currentIdx].url && !isPlaying) return; // Can't play a track with no URL
     setIsPlaying((p) => !p);
   };
 
