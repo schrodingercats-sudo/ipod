@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 import { useRef, useState, useEffect } from "react";
 import { IPod, Song } from "./components/ipod";
 
