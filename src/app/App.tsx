@@ -1,6 +1,25 @@
 import { useRef, useState, useEffect } from "react";
 import { IPod, Song } from "./components/ipod";
 
+const generateRandomString = (length: number) => {
+  const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const values = crypto.getRandomValues(new Uint8Array(length));
+  return values.reduce((acc, x) => acc + possible[x % possible.length], "");
+}
+
+const sha256 = async (plain: string) => {
+  const encoder = new TextEncoder()
+  const data = encoder.encode(plain)
+  return window.crypto.subtle.digest('SHA-256', data)
+}
+
+const base64encode = (input: ArrayBuffer) => {
+  return btoa(String.fromCharCode(...new Uint8Array(input)))
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+}
+
 export default function App() {
   const [songs, setSongs] = useState<Song[]>([]);
   const [spotifyConnected, setSpotifyConnected] = useState(false);
@@ -40,29 +59,76 @@ export default function App() {
   };
 
   useEffect(() => {
-    // Check if returning from Spotify auth
-    const hash = window.location.hash;
-    if (hash) {
-      const params = new URLSearchParams(hash.substring(1));
-      const token = params.get("access_token");
-      if (token) {
-        window.history.replaceState({}, document.title, window.location.pathname);
-        loadSpotify(token);
-      }
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+
+    if (code) {
+      const clientId = import.meta.env.VITE_SPOTIFY_CLIENT_ID;
+      const redirectUri = window.location.origin + "/";
+      const codeVerifier = localStorage.getItem('code_verifier');
+
+      if (!codeVerifier || !clientId) return;
+
+      const exchangeToken = async () => {
+        try {
+          const payload = {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({
+              client_id: clientId,
+              grant_type: 'authorization_code',
+              code,
+              redirect_uri: redirectUri,
+              code_verifier: codeVerifier,
+            }),
+          }
+
+          const body = await fetch('https://accounts.spotify.com/api/token', payload);
+          const response = await body.json();
+
+          if (response.access_token) {
+            window.history.replaceState({}, document.title, window.location.pathname);
+            loadSpotify(response.access_token);
+          } else {
+            setSpotifyError("Failed to authenticate with Spotify.");
+          }
+        } catch (error) {
+          setSpotifyError("Failed to exchange code for token.");
+        }
+      };
+
+      exchangeToken();
     }
   }, []);
 
-  const handleSpotifyConnect = () => {
+  const handleSpotifyConnect = async () => {
     const clientId = import.meta.env.VITE_SPOTIFY_CLIENT_ID;
     if (!clientId) {
       setSpotifyError("Spotify Client ID is not configured.");
       return;
     }
     const redirectUri = window.location.origin + "/";
-    const authUrl = `https://accounts.spotify.com/authorize?client_id=${clientId}&response_type=token&redirect_uri=${encodeURIComponent(
-      redirectUri
-    )}&scope=user-library-read`;
-    window.location.href = authUrl;
+
+    const codeVerifier = generateRandomString(64);
+    const hashed = await sha256(codeVerifier);
+    const codeChallenge = base64encode(hashed);
+
+    window.localStorage.setItem('code_verifier', codeVerifier);
+
+    const authUrl = new URL("https://accounts.spotify.com/authorize");
+    const params = {
+      response_type: 'code',
+      client_id: clientId,
+      scope: 'user-library-read',
+      code_challenge_method: 'S256',
+      code_challenge: codeChallenge,
+      redirect_uri: redirectUri,
+    };
+
+    authUrl.search = new URLSearchParams(params).toString();
+    window.location.href = authUrl.toString();
   };
 
   const loadSpotify = async (token: string) => {
