@@ -106,7 +106,8 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
     if (!songs[currentIdx].url) {
       setIsPlaying(false);
       setProgress(0);
-      a.src = "";
+      a.removeAttribute("src");
+      a.load();
       return;
     }
 
@@ -375,6 +376,7 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
         onLoadedMetadata={(e) => setDuration((e.target as HTMLAudioElement).duration)}
         onEnded={() => {
           if (!songs.length) return;
+          if (!songs[currentIdx]?.url) return; // Prevent loop if track has no URL
           setCurrentIdx((i) => (i + 1) % songs.length);
           setIsPlaying(true);
         }}
