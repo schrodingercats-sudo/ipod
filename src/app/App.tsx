@@ -141,22 +141,26 @@ export default function App() {
       });
       if (!res.ok) throw new Error(`Spotify responded ${res.status}`);
       const data = await res.json();
-      const imported: Song[] = (data.items || [])
+      const tracks = (data.items || [])
         .map((it: any) => it.track)
-        .filter((t: any) => t)
+        .filter((t: any) => t);
+      const playableTracks = tracks.filter((t: any) => Boolean(t.preview_url));
+      const imported: Song[] = playableTracks
         .map((t: any) => ({
           id: `spotify-${t.id}`,
           title: t.name,
           artist: (t.artists || []).map((a: any) => a.name).join(", "),
           album: t.album?.name ?? "",
-          url: t.preview_url || "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA", // fallback to silent 1s audio if no preview
-          duration: t.preview_url ? 30 : 1, // 1s duration for the silent fallback
+          url: t.preview_url,
+          duration: 30,
           cover: t.album?.images?.[0]?.url,
           source: "spotify" as const,
-          previewOnly: !!t.preview_url,
+          previewOnly: true,
         }));
-      if (!imported.length) {
+      if (!tracks.length) {
         setSpotifyError("Your Spotify library is empty.");
+      } else if (!imported.length) {
+        setSpotifyError("None of your saved Spotify tracks have playable previews.");
       } else {
         setSongs((s) => [...s, ...imported]);
         setSpotifyConnected(true);

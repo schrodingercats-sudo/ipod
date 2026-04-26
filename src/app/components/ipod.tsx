@@ -67,6 +67,8 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const screen = stack[stack.length - 1];
   const sel = selected[selected.length - 1];
+  const currentSong = songs[currentIdx];
+  const currentSongUrl = currentSong?.url ?? "";
 
   useEffect(() => {
     const i = setInterval(() => setTime(new Date()), 30000);
@@ -101,30 +103,32 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
 
   useEffect(() => {
     const a = audioRef.current;
-    if (!a || !songs[currentIdx]) return;
-    
-    if (!songs[currentIdx].url) {
+    if (!a) return;
+
+    setProgress(0);
+    setDuration(0);
+
+    if (!currentSongUrl) {
       setIsPlaying(false);
-      setProgress(0);
+      a.pause();
       a.removeAttribute("src");
       a.load();
       return;
     }
 
-    a.src = songs[currentIdx].url;
+    a.src = currentSongUrl;
     a.load();
-    if (isPlaying) a.play().catch(() => setIsPlaying(false));
-  }, [currentIdx, songs.length]);
+  }, [currentIdx, currentSongUrl]);
 
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
-    if (isPlaying && songs[currentIdx]?.url) {
-      a.play().catch(() => setIsPlaying(false));
-    } else {
+    if (!isPlaying || !currentSongUrl) {
       a.pause();
+      return;
     }
-  }, [isPlaying]);
+    a.play().catch(() => setIsPlaying(false));
+  }, [isPlaying, currentSongUrl]);
 
   const pushScreen = (s: Screen, t: string) => {
     setStack((p) => [...p, s]);
@@ -147,8 +151,30 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
     });
   };
 
+  const findPlayableSongIndex = (fromIdx: number, direction: 1 | -1) => {
+    if (songs.length < 2) return -1;
+
+    for (let step = 1; step < songs.length; step += 1) {
+      const idx = (fromIdx + step * direction + songs.length) % songs.length;
+      if (songs[idx]?.url) return idx;
+    }
+
+    return -1;
+  };
+
+  const playAdjacentSong = (direction: 1 | -1, stopWhenMissing = false) => {
+    const nextIdx = findPlayableSongIndex(currentIdx, direction);
+    if (nextIdx === -1) {
+      if (stopWhenMissing) setIsPlaying(false);
+      return;
+    }
+
+    setCurrentIdx(nextIdx);
+    setIsPlaying(true);
+  };
+
   const playSongAt = (idx: number) => {
-    if (!songs[idx]) return;
+    if (!songs[idx]?.url) return;
     setCurrentIdx(idx);
     setIsPlaying(true);
     pushScreen({ kind: "nowPlaying" }, "Now Playing");
@@ -247,6 +273,7 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
     flashPressed("center");
     setRipple((r) => r + 1);
     if (screen.kind === "nowPlaying") {
+      if (!currentSongUrl && !isPlaying) return;
       setIsPlaying((p) => !p);
       return;
     }
@@ -260,8 +287,7 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
     flashPressed("next");
     if (screen.kind === "nowPlaying") {
       if (!songs.length) return;
-      setCurrentIdx((i) => (i + 1) % songs.length);
-      setIsPlaying(true);
+      playAdjacentSong(1);
     } else if (items.length) {
       setSel(Math.min(items.length - 1, sel + 1));
     }
@@ -273,8 +299,7 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
       if (progress > 3 && audioRef.current) {
         audioRef.current.currentTime = 0;
       } else if (songs.length) {
-        setCurrentIdx((i) => (i - 1 + songs.length) % songs.length);
-        setIsPlaying(true);
+        playAdjacentSong(-1);
       }
     } else if (items.length) {
       setSel(Math.max(0, sel - 1));
@@ -365,7 +390,6 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
     if (sel >= items.length && items.length > 0) setSel(items.length - 1);
   }, [items.length]);
 
-  const currentSong = songs[currentIdx];
   const timeStr = time.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 
   return (
@@ -376,9 +400,7 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
         onLoadedMetadata={(e) => setDuration((e.target as HTMLAudioElement).duration)}
         onEnded={() => {
           if (!songs.length) return;
-          if (!songs[currentIdx]?.url) return; // Prevent loop if track has no URL
-          setCurrentIdx((i) => (i + 1) % songs.length);
-          setIsPlaying(true);
+          playAdjacentSong(1, true);
         }}
       />
 
