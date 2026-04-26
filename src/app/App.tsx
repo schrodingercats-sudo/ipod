@@ -24,6 +24,7 @@ const base64encode = (input: ArrayBuffer) => {
 export default function App() {
   const [songs, setSongs] = useState<Song[]>([]);
   const [spotifyConnected, setSpotifyConnected] = useState(false);
+  const [spotifyAccessToken, setSpotifyAccessToken] = useState<string | null>(null);
   const [spotifyError, setSpotifyError] = useState<string | null>(null);
   const [spotifyLoading, setSpotifyLoading] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -91,6 +92,7 @@ export default function App() {
 
           if (response.access_token) {
             window.history.replaceState({}, document.title, window.location.pathname);
+            setSpotifyAccessToken(response.access_token);
             loadSpotify(response.access_token);
           } else {
             setSpotifyError("Failed to authenticate with Spotify.");
@@ -122,7 +124,13 @@ export default function App() {
     const params = {
       response_type: 'code',
       client_id: clientId,
-      scope: 'user-library-read',
+      scope: [
+        'user-library-read',
+        'streaming',
+        'user-read-email',
+        'user-read-private',
+        'user-modify-playback-state',
+      ].join(' '),
       code_challenge_method: 'S256',
       code_challenge: codeChallenge,
       redirect_uri: redirectUri,
@@ -155,6 +163,7 @@ export default function App() {
           cover: t.album?.images?.[0]?.url,
           source: "spotify" as const,
           previewOnly: Boolean(t.preview_url),
+          uri: t.uri,
         }));
       if (!tracks.length) {
         setSpotifyError("Your Spotify library is empty.");
@@ -162,7 +171,7 @@ export default function App() {
         setSongs((s) => [...s, ...imported]);
         setSpotifyConnected(true);
         if (imported.every((song) => !song.url)) {
-          setSpotifyError("Spotify imported your saved tracks, but none include playable previews.");
+          setSpotifyError(null);
         }
       }
     } catch (e: any) {
@@ -198,6 +207,8 @@ export default function App() {
           onImportFiles={() => fileRef.current?.click()}
           onConnectSpotify={handleSpotifyConnect}
           spotifyConnected={spotifyConnected}
+          spotifyAccessToken={spotifyAccessToken}
+          onSpotifyPlaybackError={setSpotifyError}
         />
         <div className="text-white/55 text-center max-w-sm" style={{ fontSize: "11px" }}>
           Drag around the wheel to scroll · tap labels for prev/next/play/menu · center selects.

@@ -11,6 +11,7 @@ export type Song = {
   cover?: string;
   source: "local" | "spotify";
   previewOnly?: boolean;
+  uri?: string;
 };
 
 type Screen =
@@ -41,9 +42,45 @@ type Props = {
   onImportFiles: () => void;
   onConnectSpotify: () => void;
   spotifyConnected: boolean;
+  spotifyAccessToken?: string | null;
+  onSpotifyPlaybackError?: (message: string | null) => void;
 };
 
-export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected }: Props) {
+const SPOTIFY_SDK_URL = "https://sdk.scdn.co/spotify-player.js";
+
+const loadSpotifyPlaybackSdk = () => {
+  return new Promise<void>((resolve, reject) => {
+    const win = window as any;
+    if (win.Spotify?.Player) {
+      resolve();
+      return;
+    }
+
+    win.onSpotifyWebPlaybackSDKReady = () => resolve();
+
+    const existingScript = document.querySelector<HTMLScriptElement>(`script[src="${SPOTIFY_SDK_URL}"]`);
+    if (existingScript) {
+      existingScript.addEventListener("load", () => resolve(), { once: true });
+      existingScript.addEventListener("error", () => reject(new Error("Failed to load Spotify Web Playback SDK.")), { once: true });
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = SPOTIFY_SDK_URL;
+    script.async = true;
+    script.onerror = () => reject(new Error("Failed to load Spotify Web Playback SDK."));
+    document.body.appendChild(script);
+  });
+};
+
+export function IPod({
+  songs,
+  onImportFiles,
+  onConnectSpotify,
+  spotifyConnected,
+  spotifyAccessToken,
+  onSpotifyPlaybackError,
+}: Props) {
   const [stack, setStack] = useState<Screen[]>([{ kind: "menu" }]);
   const [selected, setSelected] = useState<number[]>([0]);
   const [title, setTitle] = useState<string[]>(["iPod"]);
@@ -53,6 +90,7 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(0.8);
+  const [spotifyDeviceId, setSpotifyDeviceId] = useState<string | null>(null);
 
   // Real device battery
   const [battery, setBattery] = useState<number | null>(null);
@@ -65,10 +103,12 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
   const [wheelSpin, setWheelSpin] = useState(0);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const spotifyPlayerRef = useRef<any>(null);
   const screen = stack[stack.length - 1];
   const sel = selected[selected.length - 1];
   const currentSong = songs[currentIdx];
-  const currentSongUrl = currentSong?.url ?? "";
+  const currentSongUsesSpotify = Boolean(currentSong?.source === "spotify" && currentSong.uri && spotifyAccessToken);
+  const currentSongUrl = currentSongUsesSpotify ? "" : currentSong?.url ?? "";
 
   useEffect(() => {
     const i = setInterval(() => setTime(new Date()), 30000);
@@ -99,7 +139,67 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
 
   useEffect(() => {
     if (audioRef.current) audioRef.current.volume = volume;
+    spotifyPlayerRef.current?.setVolume?.(volume);
   }, [volume]);
+
+  useEffect(() => {
+    if (!spotifyAccessToken) return;
+
+    let cancelled = false;
+
+    const setupSpotifyPlayer = async () => {
+      try {
+        await loadSpotifyPlaybackSdk();
+        if (cancelled || spotifyPlayerRef.current) return;
+
+        const win = window as any;
+        const player = new win.Spotify.Player({
+          name: "Interactive iPod",
+          getOAuthToken: (cb: (token: string) => void) => cb(spotifyAccessToken),
+          volume,
+        });
+
+        spotifyPlayerRef.current = player;
+
+        player.addListener("ready", ({ device_id }: { device_id: string }) => {
+          setSpotifyDeviceId(device_id);
+          onSpotifyPlaybackError?.(null);
+        });
+        player.addListener("not_ready", () => setSpotifyDeviceId(null));
+        player.addListener("initialization_error", ({ message }: { message: string }) => {
+          onSpotifyPlaybackError?.(`Spotify player failed to initialize: ${message}`);
+        });
+        player.addListener("authentication_error", ({ message }: { message: string }) => {
+          onSpotifyPlaybackError?.(`Spotify authentication expired. Reconnect Spotify. ${message}`);
+        });
+        player.addListener("account_error", ({ message }: { message: string }) => {
+          onSpotifyPlaybackError?.(`Spotify Premium is required to play full tracks here. ${message}`);
+        });
+        player.addListener("playback_error", ({ message }: { message: string }) => {
+          onSpotifyPlaybackError?.(`Spotify playback failed: ${message}`);
+        });
+        player.addListener("player_state_changed", (state: any) => {
+          if (!state) return;
+          setIsPlaying(!state.paused);
+          setProgress((state.position || 0) / 1000);
+          setDuration((state.duration || 0) / 1000);
+        });
+
+        const connected = await player.connect();
+        if (!connected) onSpotifyPlaybackError?.("Spotify player could not connect in this browser.");
+      } catch (error: any) {
+        onSpotifyPlaybackError?.(error.message || "Failed to load Spotify player.");
+      }
+    };
+
+    setupSpotifyPlayer();
+
+    return () => {
+      cancelled = true;
+      spotifyPlayerRef.current?.disconnect?.();
+      spotifyPlayerRef.current = null;
+    };
+  }, [spotifyAccessToken]);
 
   useEffect(() => {
     const a = audioRef.current;
@@ -109,7 +209,7 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
     setDuration(0);
 
     if (!currentSongUrl) {
-      setIsPlaying(false);
+      if (!currentSongUsesSpotify) setIsPlaying(false);
       a.pause();
       a.removeAttribute("src");
       a.load();
@@ -129,6 +229,15 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
     }
     a.play().catch(() => setIsPlaying(false));
   }, [isPlaying, currentSongUrl]);
+
+  useEffect(() => {
+    if (!currentSongUsesSpotify || !spotifyPlayerRef.current) return;
+    if (isPlaying) {
+      spotifyPlayerRef.current.resume?.().catch(() => {});
+    } else {
+      spotifyPlayerRef.current.pause?.().catch(() => {});
+    }
+  }, [isPlaying, currentSongUsesSpotify]);
 
   const pushScreen = (s: Screen, t: string) => {
     setStack((p) => [...p, s]);
@@ -151,15 +260,82 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
     });
   };
 
+  const isSongPlayable = (song?: Song) => {
+    if (!song) return false;
+    if (song.source === "spotify") return Boolean(song.uri && spotifyAccessToken);
+    return Boolean(song.url);
+  };
+
   const findPlayableSongIndex = (fromIdx: number, direction: 1 | -1) => {
     if (songs.length < 2) return -1;
 
     for (let step = 1; step < songs.length; step += 1) {
       const idx = (fromIdx + step * direction + songs.length) % songs.length;
-      if (songs[idx]?.url) return idx;
+      if (isSongPlayable(songs[idx])) return idx;
     }
 
     return -1;
+  };
+
+  const startSpotifyTrack = async (song: Song) => {
+    if (!song.uri) {
+      onSpotifyPlaybackError?.("Spotify did not provide a track URI for this song.");
+      setIsPlaying(false);
+      return;
+    }
+
+    if (!spotifyAccessToken) {
+      onSpotifyPlaybackError?.("Reconnect Spotify to play full tracks.");
+      setIsPlaying(false);
+      return;
+    }
+
+    if (!spotifyDeviceId || !spotifyPlayerRef.current) {
+      onSpotifyPlaybackError?.("Spotify player is still connecting. Try again in a moment.");
+      setIsPlaying(false);
+      return;
+    }
+
+    try {
+      await spotifyPlayerRef.current.activateElement?.();
+
+      const headers = {
+        Authorization: `Bearer ${spotifyAccessToken}`,
+        "Content-Type": "application/json",
+      };
+
+      const transferRes = await fetch("https://api.spotify.com/v1/me/player", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ device_ids: [spotifyDeviceId], play: false }),
+      });
+
+      if (!transferRes.ok) {
+        if (transferRes.status === 403) {
+          throw new Error("Spotify Premium is required to play full tracks here.");
+        }
+        throw new Error(`Spotify player transfer failed with status ${transferRes.status}.`);
+      }
+
+      const playRes = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${spotifyDeviceId}`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ uris: [song.uri], position_ms: 0 }),
+      });
+
+      if (!playRes.ok) {
+        if (playRes.status === 403) {
+          throw new Error("Spotify Premium is required to play full tracks here.");
+        }
+        throw new Error(`Spotify playback failed with status ${playRes.status}.`);
+      }
+
+      onSpotifyPlaybackError?.(null);
+      setIsPlaying(true);
+    } catch (error: any) {
+      onSpotifyPlaybackError?.(error.message || "Spotify playback failed.");
+      setIsPlaying(false);
+    }
   };
 
   const playAdjacentSong = (direction: 1 | -1, stopWhenMissing = false) => {
@@ -169,20 +345,29 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
       return;
     }
 
-    setCurrentIdx(nextIdx);
-    setIsPlaying(true);
+    playSongAt(nextIdx, false);
   };
 
-  const playSongAt = (idx: number) => {
+  const playSongAt = (idx: number, openNowPlaying = true) => {
     if (!songs[idx]) return;
+    const song = songs[idx];
     setCurrentIdx(idx);
-    setIsPlaying(Boolean(songs[idx].url));
-    pushScreen({ kind: "nowPlaying" }, "Now Playing");
+    if (openNowPlaying && screen.kind !== "nowPlaying") pushScreen({ kind: "nowPlaying" }, "Now Playing");
+
+    if (song.source === "spotify") {
+      setProgress(0);
+      setDuration(song.duration);
+      setIsPlaying(false);
+      startSpotifyTrack(song);
+      return;
+    }
+
+    setIsPlaying(Boolean(song.url));
   };
 
   const playRandomSong = () => {
     const playableIndexes = songs
-      .map((song, idx) => (song.url ? idx : -1))
+      .map((song, idx) => (isSongPlayable(song) ? idx : -1))
       .filter((idx) => idx !== -1);
 
     if (!playableIndexes.length) {
@@ -201,7 +386,8 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
 
   const getSongHint = (song: Song) => {
     if (song.source !== "spotify") return undefined;
-    return song.url ? "30s" : "No preview";
+    if (song.uri && spotifyAccessToken) return "Spotify";
+    return song.url ? "30s" : "Reconnect";
   };
 
   const songMenuItem = (song: Song, idx: number): MenuItem => ({
@@ -303,7 +489,13 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
     flashPressed("center");
     setRipple((r) => r + 1);
     if (screen.kind === "nowPlaying") {
-      if (!currentSongUrl && !isPlaying) return;
+      if (!currentSong) return;
+      if (currentSong.source === "spotify") {
+        if (isPlaying) setIsPlaying(false);
+        else startSpotifyTrack(currentSong);
+        return;
+      }
+      if (!currentSong.url && !isPlaying) return;
       setIsPlaying((p) => !p);
       return;
     }
@@ -338,8 +530,14 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
 
   const onPlayPause = () => {
     flashPressed("play");
-    if (!songs[currentIdx]) return;
-    if (!songs[currentIdx].url && !isPlaying) return; // Can't play a track with no URL
+    const song = songs[currentIdx];
+    if (!song) return;
+    if (song.source === "spotify") {
+      if (isPlaying) setIsPlaying(false);
+      else startSpotifyTrack(song);
+      return;
+    }
+    if (!song.url && !isPlaying) return; // Can't play a track with no URL
     setIsPlaying((p) => !p);
   };
 
@@ -515,6 +713,7 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
                 duration={duration || currentSong.duration}
                 volume={volume}
                 isPlaying={isPlaying}
+                spotifyPlaybackAvailable={Boolean(currentSong.source === "spotify" && currentSong.uri && spotifyAccessToken)}
               />
             )}
 
@@ -781,6 +980,7 @@ function NowPlaying({
   duration,
   volume,
   isPlaying,
+  spotifyPlaybackAvailable,
 }: {
   song: Song;
   idx: number;
@@ -789,16 +989,18 @@ function NowPlaying({
   duration: number;
   volume: number;
   isPlaying: boolean;
+  spotifyPlaybackAvailable: boolean;
 }) {
   const pct = duration > 0 ? (progress / duration) * 100 : 0;
   return (
     <div className="px-2 pt-1 pb-2 h-full flex flex-col" style={{ fontSize: "10px", color: "#1a1a1a" }}>
       <div className="flex justify-between mb-1" style={{ color: "#555" }}>
         <span>{idx + 1} of {total}</span>
-        {song.source === "spotify" && !song.url && (
-          <span style={{ color: "#9a6a00" }}>Spotify - No preview</span>
+        {spotifyPlaybackAvailable && <span style={{ color: "#1db954" }}>Spotify</span>}
+        {!spotifyPlaybackAvailable && song.source === "spotify" && !song.url && (
+          <span style={{ color: "#9a6a00" }}>Spotify - Reconnect</span>
         )}
-        {song.previewOnly && <span style={{ color: "#1db954" }}>Spotify · 30s</span>}
+        {!spotifyPlaybackAvailable && song.previewOnly && <span style={{ color: "#1db954" }}>Spotify · 30s</span>}
       </div>
 
       <div className="flex-1 flex items-center justify-center">
