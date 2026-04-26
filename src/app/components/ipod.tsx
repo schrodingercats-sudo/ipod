@@ -174,11 +174,41 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
   };
 
   const playSongAt = (idx: number) => {
-    if (!songs[idx]?.url) return;
+    if (!songs[idx]) return;
     setCurrentIdx(idx);
-    setIsPlaying(true);
+    setIsPlaying(Boolean(songs[idx].url));
     pushScreen({ kind: "nowPlaying" }, "Now Playing");
   };
+
+  const playRandomSong = () => {
+    const playableIndexes = songs
+      .map((song, idx) => (song.url ? idx : -1))
+      .filter((idx) => idx !== -1);
+
+    if (!playableIndexes.length) {
+      pushScreen(
+        {
+          kind: "empty",
+          message: "Spotify did not provide playable previews for these tracks. Import local audio files to play them here.",
+        },
+        "No Preview"
+      );
+      return;
+    }
+
+    playSongAt(playableIndexes[Math.floor(Math.random() * playableIndexes.length)]);
+  };
+
+  const getSongHint = (song: Song) => {
+    if (song.source !== "spotify") return undefined;
+    return song.url ? "30s" : "No preview";
+  };
+
+  const songMenuItem = (song: Song, idx: number): MenuItem => ({
+    label: song.title,
+    hint: getSongHint(song),
+    action: () => playSongAt(idx),
+  });
 
   const requireSongs = (action: () => void) => {
     if (!songs.length) {
@@ -200,7 +230,7 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
         return [
           { label: "Music", icon: <Music size={10} />, action: () => pushScreen({ kind: "music" }, "Music") },
           { label: "Sources", icon: <Plug size={10} />, action: () => pushScreen({ kind: "sources" }, "Sources") },
-          { label: "Shuffle Songs", action: () => requireSongs(() => playSongAt(Math.floor(Math.random() * songs.length))) },
+          { label: "Shuffle Songs", action: () => requireSongs(playRandomSong) },
           { label: "Now Playing", action: () => songs[currentIdx] && pushScreen({ kind: "nowPlaying" }, "Now Playing") },
           { label: "Settings", action: () => pushScreen({ kind: "settings" }, "Settings") },
         ];
@@ -227,7 +257,7 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
           { label: "Songs", action: () => requireSongs(() => pushScreen({ kind: "songs" }, "Songs")) },
         ];
       case "songs":
-        return songs.map((s, i) => ({ label: s.title, action: () => playSongAt(i) }));
+        return songs.map((s, i) => songMenuItem(s, i));
       case "artists": {
         const artists = Array.from(new Set(songs.map((s) => s.artist)));
         return artists.map((a) => ({
@@ -245,11 +275,11 @@ export function IPod({ songs, onImportFiles, onConnectSpotify, spotifyConnected 
       case "artistSongs":
         return songs
           .filter((s) => s.artist === screen.artist)
-          .map((s) => ({ label: s.title, action: () => playSongAt(songs.indexOf(s)) }));
+          .map((s) => songMenuItem(s, songs.indexOf(s)));
       case "albumSongs":
         return songs
           .filter((s) => s.album === screen.album)
-          .map((s) => ({ label: s.title, action: () => playSongAt(songs.indexOf(s)) }));
+          .map((s) => songMenuItem(s, songs.indexOf(s)));
       case "settings":
         return [
           { label: "About", action: () => pushScreen({ kind: "about" }, "About") },
@@ -720,10 +750,21 @@ function MenuList({ items, selected }: { items: MenuItem[]; selected: number }) 
               animation: isSel ? "ipod-highlight 140ms ease-out" : undefined,
             }}
           >
-            <span className="flex items-center gap-1 truncate">
+            <span className="flex min-w-0 items-center gap-1 truncate">
               {it.icon}
               {it.label}
             </span>
+            {it.hint && (
+              <span
+                className="ml-auto shrink-0 pl-1"
+                style={{
+                  fontSize: "9px",
+                  opacity: isSel ? 0.9 : 0.55,
+                }}
+              >
+                {it.hint}
+              </span>
+            )}
             <ChevronRight size={12} style={{ opacity: isSel ? 1 : 0.6 }} />
           </div>
         );
@@ -754,6 +795,9 @@ function NowPlaying({
     <div className="px-2 pt-1 pb-2 h-full flex flex-col" style={{ fontSize: "10px", color: "#1a1a1a" }}>
       <div className="flex justify-between mb-1" style={{ color: "#555" }}>
         <span>{idx + 1} of {total}</span>
+        {song.source === "spotify" && !song.url && (
+          <span style={{ color: "#9a6a00" }}>Spotify - No preview</span>
+        )}
         {song.previewOnly && <span style={{ color: "#1db954" }}>Spotify · 30s</span>}
       </div>
 

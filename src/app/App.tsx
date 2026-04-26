@@ -144,26 +144,26 @@ export default function App() {
       const tracks = (data.items || [])
         .map((it: any) => it.track)
         .filter((t: any) => t);
-      const playableTracks = tracks.filter((t: any) => Boolean(t.preview_url));
-      const imported: Song[] = playableTracks
+      const imported: Song[] = tracks
         .map((t: any) => ({
           id: `spotify-${t.id}`,
           title: t.name,
           artist: (t.artists || []).map((a: any) => a.name).join(", "),
           album: t.album?.name ?? "",
-          url: t.preview_url,
-          duration: 30,
+          url: t.preview_url || "",
+          duration: t.preview_url ? 30 : Math.max(0, Math.round((t.duration_ms || 0) / 1000)),
           cover: t.album?.images?.[0]?.url,
           source: "spotify" as const,
-          previewOnly: true,
+          previewOnly: Boolean(t.preview_url),
         }));
       if (!tracks.length) {
         setSpotifyError("Your Spotify library is empty.");
-      } else if (!imported.length) {
-        setSpotifyError("None of your saved Spotify tracks have playable previews.");
       } else {
         setSongs((s) => [...s, ...imported]);
         setSpotifyConnected(true);
+        if (imported.every((song) => !song.url)) {
+          setSpotifyError("Spotify imported your saved tracks, but none include playable previews.");
+        }
       }
     } catch (e: any) {
       setSpotifyError(e.message || "Failed to connect.");
